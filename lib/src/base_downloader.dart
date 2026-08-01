@@ -206,8 +206,14 @@ abstract base class BaseDownloader {
 
   /// Retrieve data that was stored locally because it could not be
   /// delivered to the downloader
-  Future<void> retrieveLocallyStoredData() async {
-    if (!retrievedLocallyStoredData) {
+  ///
+  /// By default this only runs once per session. Set [force] to true to
+  /// retrieve again, e.g. when the app returns to the foreground while
+  /// awaiting tasks whose final updates may have been stored while the app
+  /// was suspended. This is safe to repeat: the native side clears the
+  /// stored data when it is popped, so nothing is processed twice.
+  Future<void> retrieveLocallyStoredData({bool force = false}) async {
+    if (force || !retrievedLocallyStoredData) {
       final resumeDataMap = await popUndeliveredData(Undelivered.resumeData);
       for (var jsonString in resumeDataMap.values) {
         final resumeData = ResumeData.fromJsonString(jsonString);

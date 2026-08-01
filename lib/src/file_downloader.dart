@@ -636,9 +636,12 @@ interface class FileDownloader {
   /// a stream of updates that may have been processed while in the background,
   /// and have not yet reached the callbacks or listener
   ///
-  /// Calling this method multiple times has no effect.
-  Future<void> resumeFromBackground() =>
-      _downloader.retrieveLocallyStoredData();
+  /// Calling this method multiple times has no effect, unless [force] is
+  /// true, which retrieves and delivers undelivered updates again. Use this
+  /// when the app returns to the foreground while tasks are being awaited,
+  /// as their final updates may have been stored while the app was suspended.
+  Future<void> resumeFromBackground({bool force = false}) =>
+      _downloader.retrieveLocallyStoredData(force: force);
 
   /// Reschedules tasks that are present in the database but missing from
   /// the native task queue. Typically called on app start, 5s after establishing
