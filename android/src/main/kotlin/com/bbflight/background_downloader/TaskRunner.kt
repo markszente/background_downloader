@@ -34,6 +34,7 @@ import java.net.MalformedURLException
 import kotlin.concurrent.read
 import kotlin.concurrent.write
 import androidx.core.content.edit
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 
 
@@ -52,6 +53,12 @@ interface TaskJobContext {
     var taskCanResume: Boolean
     var notificationConfigJsonString: String?
     val isTaskStopped: Boolean
+
+    /**
+     * Why the host stopped this job (a `WorkInfo.STOP_REASON_*` value on API 31+,
+     * `WorkInfo.STOP_REASON_UNKNOWN` otherwise). Only meaningful while [isTaskStopped].
+     */
+    val workStopReason: Int
 
     // Foreground control
     var runInForeground: Boolean
@@ -638,9 +645,29 @@ open class TaskRunner(
             }
             return process(connection)
         } catch (e: Exception) {
-            if (context.isTaskStopped || BDPlugin.canceledTaskIds.contains(task.taskId)) {
+            if (BDPlugin.canceledTaskIds.contains(task.taskId) ||
+                BDPlugin.cancelUpdateSentForTaskId.contains(task.taskId)
+            ) {
                 Log.i(TAG, "Task ${task.taskId} was canceled, ignoring exception: ${e.message}")
                 return TaskStatus.canceled
+            }
+            if (context.isTaskStopped) {
+                // Stopped by the host (WorkManager constraint lost, background
+                // restriction, quota, ...), NOT by the app. This must surface as
+                // `failed` so the Dart side retries/resumes it — returning
+                // `canceled` here (9.5.6) made every system stop a final,
+                // unretried failure of the whole batch and left the WorkManager
+                // job enqueued as a zombie.
+                val reason = stopReasonDescription(context.workStopReason)
+                Log.w(
+                    TAG,
+                    "Task ${task.taskId} stopped by the host ($reason), failing task so it can be retried: ${e.message}"
+                )
+                taskException = TaskException(
+                    ExceptionType.connection,
+                    description = "Worker stopped by the system ($reason): ${e.message}"
+                )
+                return TaskStatus.failed
             }
             if (BDPlugin.pausedTaskIds.contains(task.taskId)) {
                 Log.i(TAG, "Task ${task.taskId} was paused, ignoring exception: ${e.message}")
@@ -777,15 +804,14 @@ open class TaskRunner(
                         // check if task is stopped (canceled), paused or timed out
                         if (context.isTaskStopped) {
                             activeConnection?.disconnect()
-                            var stopReasonStr = "Unknown"
-                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                                // We cannot easily get StopReason inside TaskRunner without passing more context
-                                // For now, we just log generic message or rely on WorkManager specific implementation if we were inside WorkManager.
-                                // But since we are abstracting, we just assume stopped.
-                                // If needed, we can add getStopReason to TaskJobContext.
-                                // For UIDT/JobService, onStopJob passes params, but here we just check isStopped flag.
+                            val reason = stopReasonDescription(context.workStopReason)
+                            Log.w(TAG, "Task ${task.taskId} stopped by the host ($reason)")
+                            if (!BDPlugin.canceledTaskIds.contains(task.taskId)) {
+                                taskException = TaskException(
+                                    ExceptionType.connection,
+                                    description = "Worker stopped by the system ($reason)"
+                                )
                             }
-                             Log.w( TAG, "Task ${task.taskId} stopped") // simplified log
                             doneCompleter.complete(TaskStatus.failed)
                             break
                         }
@@ -907,6 +933,36 @@ open class TaskRunner(
             )
         }
         return null
+    }
+
+    /**
+     * Human-readable form of a `WorkInfo.STOP_REASON_*` value, e.g.
+     * "stopReason=7 CONSTRAINT_CONNECTIVITY", so the reason a worker was stopped
+     * reaches the app's error reporting.
+     */
+    private fun stopReasonDescription(reason: Int): String {
+        val name = when (reason) {
+            WorkInfo.STOP_REASON_NOT_STOPPED -> "NOT_STOPPED"
+            WorkInfo.STOP_REASON_UNKNOWN -> "UNKNOWN"
+            WorkInfo.STOP_REASON_CANCELLED_BY_APP -> "CANCELLED_BY_APP"
+            WorkInfo.STOP_REASON_PREEMPT -> "PREEMPT"
+            WorkInfo.STOP_REASON_TIMEOUT -> "TIMEOUT"
+            WorkInfo.STOP_REASON_DEVICE_STATE -> "DEVICE_STATE"
+            WorkInfo.STOP_REASON_CONSTRAINT_BATTERY_NOT_LOW -> "CONSTRAINT_BATTERY_NOT_LOW"
+            WorkInfo.STOP_REASON_CONSTRAINT_CHARGING -> "CONSTRAINT_CHARGING"
+            WorkInfo.STOP_REASON_CONSTRAINT_CONNECTIVITY -> "CONSTRAINT_CONNECTIVITY"
+            WorkInfo.STOP_REASON_CONSTRAINT_DEVICE_IDLE -> "CONSTRAINT_DEVICE_IDLE"
+            WorkInfo.STOP_REASON_CONSTRAINT_STORAGE_NOT_LOW -> "CONSTRAINT_STORAGE_NOT_LOW"
+            WorkInfo.STOP_REASON_QUOTA -> "QUOTA"
+            WorkInfo.STOP_REASON_BACKGROUND_RESTRICTION -> "BACKGROUND_RESTRICTION"
+            WorkInfo.STOP_REASON_APP_STANDBY -> "APP_STANDBY"
+            WorkInfo.STOP_REASON_USER -> "USER"
+            WorkInfo.STOP_REASON_SYSTEM_PROCESSING -> "SYSTEM_PROCESSING"
+            WorkInfo.STOP_REASON_ESTIMATED_APP_LAUNCH_TIME_CHANGED -> "ESTIMATED_APP_LAUNCH_TIME_CHANGED"
+            WorkInfo.STOP_REASON_FOREGROUND_SERVICE_TIMEOUT -> "FOREGROUND_SERVICE_TIMEOUT"
+            else -> "OTHER"
+        }
+        return "stopReason=$reason $name"
     }
 
     /**

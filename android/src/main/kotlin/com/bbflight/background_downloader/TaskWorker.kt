@@ -2,10 +2,12 @@ package com.bbflight.background_downloader
 
 import android.app.Notification
 import android.content.Context
+import android.os.Build
 import android.content.SharedPreferences
 import androidx.preference.PreferenceManager
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
+import androidx.work.WorkInfo
 import androidx.work.WorkerParameters
 import kotlinx.serialization.json.Json
 import android.util.Log
@@ -82,6 +84,10 @@ open class TaskWorker(
 
     override val isTaskStopped: Boolean
         get() = isStopped
+
+    override val workStopReason: Int
+        get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) stopReason
+        else WorkInfo.STOP_REASON_UNKNOWN
 
 
 

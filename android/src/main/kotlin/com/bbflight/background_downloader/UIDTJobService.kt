@@ -5,6 +5,7 @@ import android.app.job.JobParameters
 import android.app.job.JobService
 import android.content.Context
 import android.os.Build
+import androidx.work.WorkInfo
 import android.os.PersistableBundle
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -93,6 +94,9 @@ class UIDTJobService : JobService() {
 
         override val isTaskStopped: Boolean
             get() = !isActive // Simple check if job is active
+
+        override val workStopReason: Int
+            get() = WorkInfo.STOP_REASON_UNKNOWN
 
         override val isActive: Boolean
             get() {
