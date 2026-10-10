@@ -167,6 +167,28 @@ class BDPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 taskIdsRequiringWiFi.add(task.taskId)
             }
 
+            // The task goes into the task map BEFORE its job exists, written
+            // synchronously: `allTasks` reports a WorkManager job only when the
+            // map knows its task, so with the job stored first and the map
+            // written after it (asynchronously, too), a process death between
+            // the two hid a live job — `rescheduleKilledTasks` then enqueued
+            // the task again and two workers downloaded one file. A map entry
+            // without a job is harmless: nothing lists it, and a re-enqueue
+            // overwrites it. Put back as it was when the enqueue fails.
+            var previousMapEntry: Task? = null
+            var storedInMap = false
+            fun storeInTaskMap() {
+                prefsLock.write {
+                    val tasksMap = getTaskMap(prefs)
+                    previousMapEntry = tasksMap[task.taskId]
+                    tasksMap[task.taskId] = task
+                    prefs.edit(commit = true) {
+                        putString(keyTasksMap, Json.encodeToString(tasksMap))
+                    }
+                }
+                storedInMap = true
+            }
+
             val success: Boolean
             if (useJobScheduler) {
                 val jobScheduler = context.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
@@ -202,6 +224,7 @@ class BDPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 // background_downloader typically expects persistence?
                 // JobScheduler jobs are not persisted by default.
                 
+                storeInTaskMap()
                 val result = jobScheduler.schedule(jobInfoBuilder.build())
                 success = (result == JobScheduler.RESULT_SUCCESS)
                 if (!success) {
@@ -237,6 +260,7 @@ class BDPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                     requestBuilder.setExpedited(policy = OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 }
                 val workManager = WorkManager.getInstance(context)
+                storeInTaskMap()
                 success = try {
                     val operation = try {
                         workManager.enqueue(requestBuilder.build())
@@ -282,15 +306,22 @@ class BDPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                         notificationConfigJsonString = notificationConfigJsonString
                     ), success = true
                 )
-                // store Task in persistent storage, as Json representation keyed by taskId
+                return true
+            }
+            // the enqueue failed: put the task map back as it was
+            if (storedInMap) {
                 prefsLock.write {
                     val tasksMap = getTaskMap(prefs)
-                    tasksMap[task.taskId] = task
+                    val previous = previousMapEntry
+                    if (previous != null) {
+                        tasksMap[task.taskId] = previous
+                    } else {
+                        tasksMap.remove(task.taskId)
+                    }
                     prefs.edit {
                         putString(keyTasksMap, Json.encodeToString(tasksMap))
                     }
                 }
-                return true
             }
             return false
         }
