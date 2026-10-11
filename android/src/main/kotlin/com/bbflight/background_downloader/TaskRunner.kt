@@ -285,10 +285,13 @@ open class TaskRunner(
                         )
                     }
                 }
+                // Synchronously: a job that outlives its task's final status
+                // tells a WorkManager rerun from a live task by this entry
+                // (TaskWorker.doWork), so a kill right after must not lose it.
                 BDPlugin.prefsLock.write {
                     val tasksMap = getTaskMap(prefs)
                     tasksMap.remove(task.taskId)
-                    prefs.edit {
+                    prefs.edit(commit = true) {
                         putString(
                             BDPlugin.keyTasksMap,
                             Json.encodeToString<MutableMap<String, Task>>(tasksMap)

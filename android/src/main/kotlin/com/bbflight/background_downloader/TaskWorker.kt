@@ -138,6 +138,23 @@ open class TaskWorker(
                 return Result.failure()
             }
 
+            // A job WorkManager runs for a task this plugin has already
+            // finished does nothing. WorkManager's ForceStopRunnable
+            // reschedules every job it still had running when the app was
+            // force stopped (Settings, or MIUI's swipe from recents), and a
+            // job is still running for a while after its task's final status:
+            // the notification update, the holding queue enqueuing the next
+            // task. Every job's task enters the task map before the job exists
+            // (doEnqueue) and leaves it with the final status, so a job whose
+            // task is not in the map is such a leftover: rerun, it downloaded
+            // the file again, unasked (tourist_routes release test harness,
+            // 2026-10-11: an 11.7 MB chunk after a force stop).
+            val prefsForCheck = PreferenceManager.getDefaultSharedPreferences(applicationContext)
+            if (!getTaskMap(prefsForCheck).containsKey(task.taskId)) {
+                Log.i(BDPlugin.TAG, "Skipping a job for taskId ${task.taskId}: the task is finished")
+                return Result.success()
+            }
+
             notificationConfigJsonString = inputData.getString(keyNotificationConfig)
             if (notificationConfigJsonString != null) {
                 notificationConfig = Json.decodeFromString(notificationConfigJsonString!!)
