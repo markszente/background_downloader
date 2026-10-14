@@ -6,4 +6,7 @@
     <string name="bg_downloader_notification_channel_name">Downloads</string>
     <string name="bg_downloader_notification_channel_description">Updates on downloads and
         uploads in progress</string>
+    <string name="bg_downloader_finished_channel_name">Finished downloads</string>
+    <string name="bg_downloader_finished_channel_description">When a download or upload
+        has finished or failed</string>
 </resources>

@@ -376,6 +376,24 @@ object NotificationService {
 
     private const val notificationChannelId = "background_downloader"
 
+    /**
+     * Finished tasks (complete, error) post here, at the default importance.
+     * On [notificationChannelId] (low, right for progress) Android files them
+     * as silent: no sound, no heads-up, on some phones (MIUI) no status-bar
+     * icon, so a "download complete" went unseen. A channel's importance is
+     * frozen when it is created, hence a channel of its own.
+     */
+    private const val finishedChannelId = "background_downloader_finished"
+
+    private fun isFinishedType(type: NotificationType) =
+        type == NotificationType.complete || type == NotificationType.error
+
+    private fun channelFor(type: NotificationType) =
+        if (isFinishedType(type)) finishedChannelId else notificationChannelId
+
+    private fun priorityFor(type: NotificationType) =
+        if (isFinishedType(type)) NotificationCompat.PRIORITY_DEFAULT else NotificationCompat.PRIORITY_LOW
+
     private val mutex = Mutex()
     private val queue = Channel<Unit>(Channel.CONFLATED)
     private val pendingNotifications = java.util.ArrayDeque<NotificationData>()
@@ -530,8 +548,8 @@ object NotificationService {
             NotificationType.canceled -> R.drawable.outline_cancel_24
         }
         val builder = Builder(
-            taskWorker.appContext, notificationChannelId
-        ).setPriority(NotificationCompat.PRIORITY_LOW).setSmallIcon(iconDrawable)
+            taskWorker.appContext, channelFor(notificationType)
+        ).setPriority(priorityFor(notificationType)).setSmallIcon(iconDrawable)
             .setShowWhen(notificationType != NotificationType.running)
         // use stored progress if notificationType is .paused
         taskWorker.notificationProgress =
@@ -637,9 +655,12 @@ object NotificationService {
                 } else {
                     if (taskWorker.task.isDownloadTask()) R.drawable.outline_file_download_24 else R.drawable.outline_file_upload_24
                 }
+                val shownType = if (isFinished) {
+                    if (hasError) NotificationType.error else NotificationType.complete
+                } else NotificationType.running
                 val builder = Builder(
-                    taskWorker.appContext, notificationChannelId
-                ).setPriority(NotificationCompat.PRIORITY_LOW).setSmallIcon(iconDrawable)
+                    taskWorker.appContext, channelFor(shownType)
+                ).setPriority(priorityFor(shownType)).setSmallIcon(iconDrawable)
                     .setShowWhen(isFinished)
                 // title and body interpolation of tokens
                 val progress = groupNotification.progress
@@ -959,11 +980,19 @@ object NotificationService {
             ).apply {
                 description = descriptionText
             }
-            // Register the channel with the system
+            val finished = NotificationChannel(
+                finishedChannelId,
+                context.getString(R.string.bg_downloader_finished_channel_name),
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = context.getString(R.string.bg_downloader_finished_channel_description)
+            }
+            // Register the channels with the system
             val notificationManager: NotificationManager = context.getSystemService(
                 Context.NOTIFICATION_SERVICE
             ) as NotificationManager
             notificationManager.createNotificationChannel(channel)
+            notificationManager.createNotificationChannel(finished)
         }
         createdNotificationChannel = true
     }
