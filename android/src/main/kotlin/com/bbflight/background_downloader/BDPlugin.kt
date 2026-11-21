@@ -364,15 +364,20 @@ class BDPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         suspend fun cancelTasksWithIds(context: Context, taskIds: Iterable<String>): Boolean {
             val workManager = WorkManager.getInstance(context)
             Log.v(TAG, "Canceling taskIds $taskIds")
-            holdingQueue?.stateMutex?.lock()
+            // One queue for the whole locked section: configHoldingQueue can create
+            // it meanwhile, and unlocking the new queue's mutex, which this section
+            // never locked, crashed its initial calculateState ("This mutex is not
+            // locked", 1.9.2 on a Xiaomi at an update's start, 2026-11-21).
+            val queue = holdingQueue
+            queue?.stateMutex?.lock()
             val taskIdsRemovedFromHoldingQueue =
-                holdingQueue?.cancelTasksWithIds(context, taskIds) ?: listOf()
+                queue?.cancelTasksWithIds(context, taskIds) ?: listOf()
             val taskIdsRemaining = taskIds.filter { !taskIdsRemovedFromHoldingQueue.contains(it) }
             var success = true
             for (taskId in taskIdsRemaining) {
                 success = success && cancelActiveTaskWithId(context, taskId, workManager)
             }
-            holdingQueue?.stateMutex?.unlock()
+            queue?.stateMutex?.unlock()
             return success
         }
 
@@ -829,8 +834,10 @@ class BDPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
      */
     private suspend fun methodReset(call: MethodCall): Int = withContext(defaultScope.coroutineContext) {
         val group = call.arguments as String
-        holdingQueue?.stateMutex?.lock()
-        var counter = holdingQueue?.cancelAllTasks(applicationContext, group) ?: 0
+        // One queue for the whole locked section (see cancelTasksWithIds).
+        val queue = holdingQueue
+        queue?.stateMutex?.lock()
+        var counter = queue?.cancelAllTasks(applicationContext, group) ?: 0
         val tasksMap: MutableMap<String, Task>
         val prefs = PreferenceManager.getDefaultSharedPreferences(applicationContext)
         prefsLock.read {
@@ -852,7 +859,7 @@ class BDPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                         prefs,
                         context = applicationContext
                     )
-                    holdingQueue?.taskFinished(task)
+                    queue?.taskFinished(task)
                 }
             }
             workManager.cancelWorkById(workInfo.id)
@@ -875,7 +882,7 @@ class BDPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                                 prefs,
                                 context = applicationContext
                             )
-                            holdingQueue?.taskFinished(task)
+                            queue?.taskFinished(task)
                             // remove outstanding notification for task or group
                             val notificationGroup =
                                 NotificationService.groupNotificationWithTaskId(task.taskId)
@@ -901,7 +908,7 @@ class BDPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 }
             }
         }
-        holdingQueue?.stateMutex?.unlock()
+        queue?.stateMutex?.unlock()
         Log.v(TAG, "methodReset removed $counter unfinished tasks in group $group")
         counter
     }
@@ -914,8 +921,10 @@ class BDPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         withContext(defaultScope.coroutineContext) {
             val group = call.arguments as String?
             val tasksAsListOfJsonStrings = mutableListOf<String>()
-            holdingQueue?.stateMutex?.lock()
-            holdingQueue?.allTasks(group)
+            // One queue for the whole locked section (see cancelTasksWithIds).
+            val queue = holdingQueue
+            queue?.stateMutex?.lock()
+            queue?.allTasks(group)
                 ?.forEach { tasksAsListOfJsonStrings.add(Json.encodeToString(it)) }
             val workManager = WorkManager.getInstance(applicationContext)
             val workInfos = workManager.getWorkInfosByTag(TAG).get()
@@ -953,7 +962,7 @@ class BDPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                     }
                 }
             }
-            holdingQueue?.stateMutex?.unlock()
+            queue?.stateMutex?.unlock()
             Log.v(
                 TAG,
                 "Returning ${tasksAsListOfJsonStrings.size} unfinished tasks in group $group"
@@ -1005,8 +1014,10 @@ class BDPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         withContext(defaultScope.coroutineContext) {
             val taskId = call.arguments as String
             Log.v(TAG, "Returning task for taskId $taskId")
-            holdingQueue?.stateMutex?.lock()
-            var foundTask = holdingQueue?.taskForId(taskId)
+            // One queue for the whole locked section (see cancelTasksWithIds).
+            val queue = holdingQueue
+            queue?.stateMutex?.lock()
+            var foundTask = queue?.taskForId(taskId)
             if (foundTask == null) {
                 prefsLock.read {
                     val prefs = PreferenceManager.getDefaultSharedPreferences(applicationContext)
@@ -1014,7 +1025,7 @@ class BDPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                     foundTask = tasksMap[taskId]
                 }
             }
-            holdingQueue?.stateMutex?.unlock()
+            queue?.stateMutex?.unlock()
             foundTask?.let { Json.encodeToString(it) }
         }
 
